@@ -1,6 +1,3 @@
-"""
-sheets_db.py â€” Naseem Iron Store | Google Sheets Database Layer
-"""
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -64,4 +61,6 @@ def get_all_parties(type_=None, search=None):
     rows = ws.get_all_records()
     out  = []
     for r in rows:
-        if str(r.get("status","active")).upper
+        if str(r.get("status","active")).upper() == "DELETED":
+            continue
+        if type_ and r.get("type") !

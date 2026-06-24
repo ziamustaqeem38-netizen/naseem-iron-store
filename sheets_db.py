@@ -257,3 +257,129 @@ def get_report(period="monthly", type_=None):
         summary[pid]["txn_count"] += 1
     result = [dict(d, balance=d["credit"]-d["debit"]) for d in summary.values()]
     return sorted(result, key=lambda x:x["balance"], reverse=True)
+
+
+# ── Daily Cash ────────────────────────────────────────────────────────────────
+
+def get_daily_cash(date_str):
+    all_txns    = get_all_transactions()
+    all_parties = get_all_parties()
+    party_map   = {str(p["id"]): p["name"] for p in all_parties}
+
+    day_txns = [t for t in all_txns if str(t.get("txn_date","")) == date_str]
+    for t in day_txns:
+        t["party_name"] = party_map.get(str(t.get("party_id","")), "—")
+
+    total_cr = sum(float(t.get("credit",0)) for t in day_txns)
+    total_dr = sum(float(t.get("debit",0))  for t in day_txns)
+    return {
+        "total_credit":  total_cr,
+        "total_debit":   total_dr,
+        "net":           total_cr - total_dr,
+        "transactions":  day_txns,
+    }
+
+
+# ── Monthly Chart ─────────────────────────────────────────────────────────────
+
+def get_monthly_chart_data():
+    import datetime as dt
+    all_txns = get_all_transactions()
+    monthly  = {}
+    for t in all_txns:
+        d = str(t.get("txn_date",""))
+        if len(d) < 7:
+            continue
+        month = d[:7]   # "2026-06"
+        if month not in monthly:
+            monthly[month] = {"credit":0,"debit":0,"count":0}
+        monthly[month]["credit"] += float(t.get("credit",0))
+        monthly[month]["debit"]  += float(t.get("debit",0))
+        monthly[month]["count"]  += 1
+
+    result = []
+    for m in sorted(monthly.keys())[-6:]:
+        result.append({
+            "month":  m,
+            "credit": monthly[m]["credit"],
+            "debit":  monthly[m]["debit"],
+            "count":  monthly[m]["count"],
+        })
+    return result
+
+
+# ── Search Transactions ───────────────────────────────────────────────────────
+
+def search_transactions(query, txn_type=None):
+    all_txns    = get_all_transactions()
+    all_parties = get_all_parties()
+    party_map   = {str(p["id"]): p["name"] for p in all_parties}
+    query       = query.strip().lower()
+    results     = []
+    for t in all_txns:
+        inv   = str(t.get("invoice_no","")).lower()
+        notes = str(t.get("notes","")).lower()
+        if query not in inv and query not in notes:
+            continue
+        if txn_type == "credit" and float(t.get("credit",0)) <= 0:
+            continue
+        if txn_type == "debit"  and float(t.get("debit",0))  <= 0:
+            continue
+        t["party_name"] = party_map.get(str(t.get("party_id","")), "—")
+        results.append(t)
+    return results
+
+
+# ── Overdue Clients ───────────────────────────────────────────────────────────
+
+def get_overdue_clients():
+    import datetime as dt
+    today      = dt.date.today()
+    cutoff     = (today - dt.timedelta(days=30)).isoformat()
+    clients    = get_all_parties("client")
+    overdue    = []
+    for c in clients:
+        txns = get_party_transactions(c["id"])
+        if not txns:
+            continue
+        balance = txns[-1]["balance"] if txns else 0
+        if balance <= 0:
+            continue
+        last_payment = None
+        for t in reversed(txns):
+            if float(t.get("debit",0)) > 0:
+                last_payment = str(t.get("txn_date",""))
+                break
+        if last_payment is None or last_payment < cutoff:
+            overdue.append({
+                "name":      c["name"],
+                "balance":   balance,
+                "last_date": last_payment or "Never",
+            })
+    return overdue
+
+
+# ── Opening Balance ───────────────────────────────────────────────────────────
+
+def add_opening_balance(party_id, amount, balance_type, date_str, notes="Opening Balance"):
+    """
+    balance_type: 'receivable' (client owes us) or 'payable' (we owe supplier)
+    receivable = Credit entry
+    payable    = Debit entry (we owe them)
+    """
+    try:
+        amount = float(amount or 0)
+    except (TypeError, ValueError):
+        return None
+    if amount <= 0:
+        return None
+
+    is_credit = balance_type == "receivable"
+    return add_transaction(
+        party_id   = party_id,
+        txn_date   = date_str,
+        invoice_no = "OB",
+        credit     = amount if is_credit else 0,
+        debit      = amount if not is_credit else 0,
+        notes      = notes or "Opening Balance",
+    )
